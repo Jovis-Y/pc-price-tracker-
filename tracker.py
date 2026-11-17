@@ -5,9 +5,8 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from notifier import send_notification
+from notifier import send_discord_alert
 
-# Carrega variáveis de ambiente de um arquivo .env se existir (para testes locais)
 load_dotenv()
 
 HEADERS = {
@@ -16,23 +15,21 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
 def clean_price(raw_str: str) -> float | None:
     """
-    Converte strings de preço no formato brasileiro (ex: 'R$ 1.299,99') ou internacional ('1299.99') para float.
+    Converte strings de preço nos formatos brasileiro ('R$ 1.299,99') ou internacional ('1299.99') para float.
     """
     if not raw_str:
         return None
     try:
-        # Remove caracteres indesejados mantendo dígitos, pontos e vírgulas
-        clean = re.sub(r"[^\d,\.]", "", raw_str).strip()
+        clean = re.sub(r"[^\d,\.]", "", str(raw_str)).strip()
         if not clean:
             return None
         
-        # Caso padrão brasileiro: 1.250,00 -> remove ponto de milhar e troca vírgula por ponto
         if "," in clean and "." in clean:
             clean = clean.replace(".", "").replace(",", ".")
         elif "," in clean:
@@ -44,35 +41,33 @@ def clean_price(raw_str: str) -> float | None:
         return None
 
 
+# ==============================================================================
+# EXTRATORES GENÉRICOS (SCHEMA.ORG JSON-LD E META TAGS)
+# ==============================================================================
+
 def extract_price_from_ld_json(soup: BeautifulSoup) -> float | None:
-    """
-    Busca por dados estruturados Schema.org JSON-LD (usado por Kabum, Pichau, Terabyte, etc.)
-    """
-    scripts = soup.find_all("script", type="application/ld+json")
-    for script in scripts:
+    """Extrai preço de dados estruturados Schema.org JSON-LD."""
+    for script in soup.find_all("script", type="application/ld+json"):
         if not script.string:
             continue
         try:
             data = json.loads(script.string)
             items = data if isinstance(data, list) else [data]
             for item in items:
-                # Verifica se é Produto
-                if item.get("@type") == "Product" and "offers" in item:
+                if item.get("@type") in ["Product", "IndividualProduct"] and "offers" in item:
                     offers = item["offers"]
                     if isinstance(offers, list) and len(offers) > 0:
                         offers = offers[0]
                     price = offers.get("price") or offers.get("lowPrice")
                     if price:
-                        return float(price)
+                        return clean_price(str(price))
         except Exception:
             continue
     return None
 
 
 def extract_price_from_meta_tags(soup: BeautifulSoup) -> float | None:
-    """
-    Busca em meta tags de OpenGraph / Product schema (muito comum em lojas virtuais).
-    """
+    """Busca preço em meta tags OpenGraph / Twitter / Product."""
     meta_props = [
         {"property": "product:price:amount"},
         {"property": "og:price:amount"},
@@ -88,39 +83,133 @@ def extract_price_from_meta_tags(soup: BeautifulSoup) -> float | None:
     return None
 
 
-def extract_price_specific(soup: BeautifulSoup, url: str) -> float | None:
-    """
-    Seletores específicos de lojas brasileiras caso JSON-LD e Meta não estejam disponíveis.
-    """
-    # 1. Kabum
-    if "kabum.com.br" in url:
-        # Seletor do preço à vista
+# ==============================================================================
+# EXTRATORES ESPECÍFICOS POR LOJA
+# ==============================================================================
+
+def extract_olx(soup: BeautifulSoup, html: str) -> float | None:
+    """Extrai preço de anúncios da OLX Brasil."""
+    # 1. Busca no __NEXT_DATA__
+    next_data = soup.find("script", id="__NEXT_DATA__")
+    if next_data and next_data.string:
+        try:
+            data = json.loads(next_data.string)
+            ad = data.get("props", {}).get("pageProps", {}).get("ad", {})
+            price_val = ad.get("priceValue") or ad.get("price")
+            if price_val:
+                return clean_price(str(price_val))
+        except Exception:
+            pass
+
+    # 2. Seletores visuais da OLX
+    for selector in ['[data-testid="ad-price"]', 'span.olx-text--title-large', 'h2.olx-text']:
+        el = soup.select_one(selector)
+        if el and "R$" in el.text:
+            val = clean_price(el.text)
+            if val:
+                return val
+    return None
+
+
+def extract_aliexpress(soup: BeautifulSoup, html: str) -> float | None:
+    """Extrai preço de produtos do AliExpress."""
+    # 1. Regex de runParams
+    match = re.search(r'("formatedActivityPrice"|"actSkuCalPrice"|"minPrice"|"actMinPrice"):\s*"([^"]+)"', html)
+    if match:
+        val = clean_price(match.group(2))
+        if val:
+            return val
+
+    # 2. Regex de valor numérico direto
+    match_num = re.search(r'"minPrice":\s*([0-9\.]+)', html)
+    if match_num:
+        val = clean_price(match_num.group(1))
+        if val:
+            return val
+
+    # 3. Seletores HTML do AliExpress
+    for sel in [".product-price-value", ".es--wrap--16EaW-Z", "[class*='Price--currentPrice']"]:
+        el = soup.select_one(sel)
+        if el:
+            val = clean_price(el.text)
+            if val:
+                return val
+    return None
+
+
+def extract_shopee(url: str, soup: BeautifulSoup) -> float | None:
+    """Extrai preço da Shopee via API interna do item ou meta tags."""
+    # Tenta extrair shopid e itemid da URL
+    # Formatos: /product/12345/67890 ou -i.12345.67890
+    match = re.search(r'i\.(\d+)\.(\d+)', url) or re.search(r'product/(\d+)/(\d+)', url)
+    if match:
+        shop_id = match.group(1)
+        item_id = match.group(2)
+        api_url = f"https://shopee.com.br/api/v4/item/get?itemid={item_id}&shopid={shop_id}"
+        api_headers = {
+            **HEADERS,
+            "X-API-SOURCE": "rpc",
+            "Referer": url
+        }
+        try:
+            res = requests.get(api_url, headers=api_headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get("data", {})
+                raw_price = data.get("price") or data.get("price_min") or data.get("price_before_discount")
+                if raw_price:
+                    # Shopee armazena preços multiplicados por 100.000
+                    return float(raw_price) / 100000.0
+        except Exception:
+            pass
+
+    # Fallback: Meta tags da página HTML da Shopee
+    return extract_price_from_meta_tags(soup)
+
+
+def extract_store_specific(soup: BeautifulSoup, html: str, url: str) -> float | None:
+    """Direciona para o extrator específico conforme o domínio."""
+    url_lower = url.lower()
+
+    # Shopee
+    if "shopee.com.br" in url_lower:
+        return extract_shopee(url, soup)
+
+    # OLX
+    if "olx.com.br" in url_lower:
+        return extract_olx(soup, html)
+
+    # AliExpress
+    if "aliexpress.com" in url_lower:
+        return extract_aliexpress(soup, html)
+
+    # Kabum
+    if "kabum.com.br" in url_lower:
         el = soup.select_one("h4.finalPrice, .regularPrice, [class*='finalPrice']")
         if el:
             return clean_price(el.text)
 
-    # 2. Terabyte
-    if "terabyteshop.com.br" in url:
+    # Terabyte
+    if "terabyteshop.com.br" in url_lower:
         el = soup.select_one("#valCarrinho, .val-prod, p.val-prod, [class*='val-prod']")
         if el:
             return clean_price(el.text)
 
-    # 3. Pichau
-    if "pichau.com.br" in url:
+    # Pichau
+    if "pichau.com.br" in url_lower:
         el = soup.select_one("[class*='price'], [class*='preco']")
         if el:
             return clean_price(el.text)
 
-    # 4. Mercado Livre
-    if "mercadolivre.com.br" in url:
+    # Mercado Livre
+    if "mercadolivre.com.br" in url_lower:
         el = soup.select_one(".ui-pdp-price__second-line .andes-money-amount__fraction, .price-tag-fraction")
         if el:
             cents_el = soup.select_one(".ui-pdp-price__second-line .andes-money-amount__cents")
             cents = cents_el.text if cents_el else "00"
             return clean_price(f"{el.text},{cents}")
 
-    # 5. Amazon Brasil
-    if "amazon.com.br" in url:
+    # Amazon Brasil
+    if "amazon.com.br" in url_lower:
         whole = soup.select_one(".a-price-whole")
         fraction = soup.select_one(".a-price-fraction")
         if whole:
@@ -132,9 +221,7 @@ def extract_price_specific(soup: BeautifulSoup, url: str) -> float | None:
 
 
 def fetch_price(url: str, timeout: int = 15) -> float | None:
-    """
-    Faz a requisição HTTP e extrai o preço atual do produto.
-    """
+    """Faz a requisição e tenta as múltiplas estratégias de extração."""
     try:
         res = requests.get(url, headers=HEADERS, timeout=timeout)
         if res.status_code != 200:
@@ -143,18 +230,18 @@ def fetch_price(url: str, timeout: int = 15) -> float | None:
 
         soup = BeautifulSoup(res.text, "lxml")
 
-        # Estratégia 1: JSON-LD (Mais estável e oficial)
+        # 1. Extrator específico por loja
+        price = extract_store_specific(soup, res.text, url)
+        if price:
+            return price
+
+        # 2. Schema.org JSON-LD
         price = extract_price_from_ld_json(soup)
         if price:
             return price
 
-        # Estratégia 2: Meta Tags
+        # 3. Meta Tags (OpenGraph / Twitter)
         price = extract_price_from_meta_tags(soup)
-        if price:
-            return price
-
-        # Estratégia 3: Seletores específicos por loja
-        price = extract_price_specific(soup, url)
         if price:
             return price
 
@@ -163,6 +250,10 @@ def fetch_price(url: str, timeout: int = 15) -> float | None:
         print(f"  [Erro] Falha ao consultar {url}: {e}")
         return None
 
+
+# ==============================================================================
+# CONTROLE DE HISTÓRICO E EXECUÇÃO
+# ==============================================================================
 
 def load_history(filepath: str = "history.json") -> dict:
     if os.path.exists(filepath):
@@ -183,9 +274,9 @@ def save_history(history: dict, filepath: str = "history.json"):
 
 
 def main():
-    print("=" * 60)
-    print("Iniciando Monitor de Preços de Hardware")
-    print("=" * 60)
+    print("=" * 65)
+    print("🚀 Radar de Preços PC (Kabum, Terabyte, Pichau, ML, Amazon, OLX, Ali, Shopee)")
+    print("=" * 65)
 
     config_path = "config.json"
     if not os.path.exists(config_path):
@@ -208,24 +299,23 @@ def main():
         url = item.get("url")
 
         print(f"\n🔍 Verificando: {name}")
-        print(f"   Alvo: R$ {target_price:,.2f} | URL: {url}")
+        print(f"   Alvo: R$ {target_price:,.2f} | Link: {url}")
 
         current_price = fetch_price(url, timeout=timeout)
 
         if current_price is None:
-            print(f"   ⚠️ Não foi possível obter o preço no momento.")
+            print(f"   ⚠️ Preço não identificado no momento.")
             continue
 
-        print(f"   💲 Preço Encontrado: R$ {current_price:,.2f}")
+        print(f"   💲 Preço Atual: R$ {current_price:,.2f}")
 
-        # Verifica se o preço atingiu a meta
         if current_price <= target_price:
-            print(f"   🎯 OPORTUNIDADE! Preço atingiu ou superou o alvo!")
-            
-            # Verifica se já notificamos esse preço específico para evitar spam
+            print(f"   🎯 META ATINGIDA! Disparando alerta...")
             last_notified_price = history.get(url, {}).get("last_notified_price")
+            
+            # Só reenvia se o preço mudou para evitar alertas duplicados a cada 4 horas
             if last_notified_price != current_price:
-                send_notification(name, current_price, target_price, url)
+                send_discord_alert(name, current_price, target_price, url)
                 history[url] = {
                     "name": name,
                     "last_notified_price": current_price,
@@ -233,18 +323,18 @@ def main():
                     "timestamp": time.time()
                 }
             else:
-                print(f"   ℹ️ Alerta já disparado anteriormente para este valor (R$ {current_price:,.2f}).")
+                print(f"   ℹ️ Alerta já foi enviado antes para este valor (R$ {current_price:,.2f}).")
         else:
             diff = current_price - target_price
-            print(f"   ⏳ Acima do alvo por R$ {diff:,.2f}.")
+            print(f"   ⏳ Acima da meta por R$ {diff:,.2f}.")
 
-        # Pequeno delay para respeitar os servidores
+        # Delay cortês entre requisições
         time.sleep(2)
 
     save_history(history)
-    print("\n" + "=" * 60)
-    print("Varredura finalizada com sucesso.")
-    print("=" * 60)
+    print("\n" + "=" * 65)
+    print("Varredura finalizada.")
+    print("=" * 65)
 
 
 if __name__ == "__main__":

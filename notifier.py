@@ -2,92 +2,91 @@ import os
 import requests
 from datetime import datetime
 
-def send_notification(product_name: str, current_price: float, target_price: float, url: str):
+# Ícones e cores para cada loja no Discord Embed
+STORE_METADATA = {
+    "kabum": {"name": "KaBuM!", "color": 16744192},           # Laranja (#FF7F00)
+    "terabyte": {"name": "TerabyteShop", "color": 16753920},   # Laranja claro
+    "pichau": {"name": "Pichau", "color": 14423100},          # Vermelho
+    "mercadolivre": {"name": "Mercado Livre", "color": 16773376}, # Amarelo (#FFE600)
+    "amazon": {"name": "Amazon Brasil", "color": 16750848},    # Laranja Amazon
+    "olx": {"name": "OLX Brasil", "color": 7025886},          # Roxo OLX (#6B37DE)
+    "aliexpress": {"name": "AliExpress", "color": 15082000},   # Laranja AliExpress
+    "shopee": {"name": "Shopee", "color": 15682855},          # Laranja avermelhado Shopee (#EE4D2D)
+    "default": {"name": "Loja Online", "color": 3066993}      # Verde
+}
+
+def identify_store(url: str) -> dict:
+    url_lower = url.lower()
+    for key in STORE_METADATA:
+        if key in url_lower:
+            return STORE_METADATA[key]
+    return STORE_METADATA["default"]
+
+
+def send_discord_alert(product_name: str, current_price: float, target_price: float, url: str):
     """
-    Dispara notificações para Discord e/ou Telegram com base nas variáveis de ambiente.
+    Envia um alerta com embed rico diretamente para o Discord via Webhook.
     """
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        print("  [Discord] AVISO: DISCORD_WEBHOOK_URL não configurada.")
+        return
+
     diff = target_price - current_price
-    pct = (diff / target_price) * 100
+    pct = (diff / target_price) * 100 if target_price > 0 else 0
     timestamp = datetime.now().strftime("%d/%m/%Y às %H:%M")
+    store = identify_store(url)
 
-    # 1. Notificação via Discord Webhook
-    discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
-    if discord_webhook:
-        send_discord_alert(discord_webhook, product_name, current_price, target_price, diff, pct, url, timestamp)
+    curr_fmt = f"R$ {current_price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    targ_fmt = f"R$ {target_price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    diff_fmt = f"R$ {diff:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-    # 2. Notificação via Telegram Bot
-    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if telegram_token and telegram_chat_id:
-        send_telegram_alert(telegram_token, telegram_chat_id, product_name, current_price, target_price, diff, pct, url, timestamp)
-
-
-def send_discord_alert(webhook_url: str, name: str, current: float, target: float, diff: float, pct: float, url: str, timestamp: str):
     payload = {
         "username": "Radar de Preços PC",
         "avatar_url": "https://cdn-icons-png.flaticon.com/512/891/891462.png",
         "embeds": [
             {
-                "title": f"🚨 ALERTA DE PREÇO: {name}",
-                "description": f"O produto atingiu uma faixa de valor abaixo do seu preço-alvo!",
+                "title": f"🚨 ALERTA: {product_name}",
+                "description": f"Preço abaixo da meta na loja **{store['name']}**!",
                 "url": url,
-                "color": 3066993,  # Verde (#2ECC71)
+                "color": store["color"],
                 "fields": [
                     {
                         "name": "💰 Preço Atual",
-                        "value": f"**R$ {current:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."),
+                        "value": f"**{curr_fmt}**",
                         "inline": True
                     },
                     {
                         "name": "🎯 Preço-Alvo",
-                        "value": f"R$ {target:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                        "value": targ_fmt,
                         "inline": True
                     },
                     {
                         "name": "📉 Economia",
-                        "value": f"R$ {diff:,.2f} (-{pct:.1f}%)".replace(",", "X").replace(".", ",").replace("X", "."),
+                        "value": f"{diff_fmt} (-{pct:.1f}%)",
                         "inline": True
+                    },
+                    {
+                        "name": "🏪 Loja",
+                        "value": store["name"],
+                        "inline": True
+                    },
+                    {
+                        "name": "🔗 Link Direto",
+                        "value": f"[Abrir Oferta]({url})",
+                        "inline": False
                     }
                 ],
                 "footer": {
-                    "text": f"Verificado em {timestamp}"
+                    "text": f"Verificado automaticamente em {timestamp}"
                 }
             }
         ]
     }
+
     try:
         res = requests.post(webhook_url, json=payload, timeout=10)
         res.raise_for_status()
-        print(f"[{name}] Alerta enviado com sucesso para o Discord.")
+        print(f"  [Discord] Alerta de '{product_name}' enviado com sucesso!")
     except Exception as e:
-        print(f"Erro ao enviar webhook do Discord: {e}")
-
-
-def send_telegram_alert(token: str, chat_id: str, name: str, current: float, target: float, diff: float, pct: float, url: str, timestamp: str):
-    curr_fmt = f"R$ {current:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    targ_fmt = f"R$ {target:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    diff_fmt = f"R$ {diff:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-    text = (
-        f"🚨 *ALERTA DE PREÇO ENCONTRADO!*\n\n"
-        f"📦 *Produto:* [{name}]({url})\n"
-        f"💰 *Preço Atual:* `{curr_fmt}`\n"
-        f"🎯 *Preço-Alvo:* `{targ_fmt}`\n"
-        f"📉 *Economia:* `{diff_fmt}` (-{pct:.1f}%)\n\n"
-        f"⏰ _Verificado em: {timestamp}_\n"
-        f"🔗 [Clique aqui para abrir a loja]({url})"
-    )
-
-    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": False
-    }
-    try:
-        res = requests.post(api_url, json=payload, timeout=10)
-        res.raise_for_status()
-        print(f"[{name}] Alerta enviado com sucesso para o Telegram.")
-    except Exception as e:
-        print(f"Erro ao enviar alerta para o Telegram: {e}")
+        print(f"  [Discord] Erro ao disparar webhook: {e}")
