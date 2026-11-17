@@ -2,17 +2,16 @@ import os
 import requests
 from datetime import datetime
 
-# Ícones e cores para cada loja no Discord Embed
 STORE_METADATA = {
-    "kabum": {"name": "KaBuM!", "color": 16744192},           # Laranja (#FF7F00)
-    "terabyte": {"name": "TerabyteShop", "color": 16753920},   # Laranja claro
-    "pichau": {"name": "Pichau", "color": 14423100},          # Vermelho
-    "mercadolivre": {"name": "Mercado Livre", "color": 16773376}, # Amarelo (#FFE600)
-    "amazon": {"name": "Amazon Brasil", "color": 16750848},    # Laranja Amazon
-    "olx": {"name": "OLX Brasil", "color": 7025886},          # Roxo OLX (#6B37DE)
-    "aliexpress": {"name": "AliExpress", "color": 15082000},   # Laranja AliExpress
-    "shopee": {"name": "Shopee", "color": 15682855},          # Laranja avermelhado Shopee (#EE4D2D)
-    "default": {"name": "Loja Online", "color": 3066993}      # Verde
+    "kabum": {"name": "KaBuM!", "color": 16744192},
+    "terabyte": {"name": "TerabyteShop", "color": 16753920},
+    "pichau": {"name": "Pichau", "color": 14423100},
+    "mercadolivre": {"name": "Mercado Livre", "color": 16773376},
+    "amazon": {"name": "Amazon Brasil", "color": 16750848},
+    "olx": {"name": "OLX Brasil", "color": 7025886},
+    "aliexpress": {"name": "AliExpress", "color": 15082000},
+    "shopee": {"name": "Shopee", "color": 15682855},
+    "default": {"name": "Loja Online", "color": 3066993}
 }
 
 def identify_store(url: str) -> dict:
@@ -23,14 +22,15 @@ def identify_store(url: str) -> dict:
     return STORE_METADATA["default"]
 
 
-def send_discord_alert(product_name: str, current_price: float, target_price: float, url: str):
+def send_discord_alert(product_name: str, current_price: float, target_price: float, url: str) -> bool:
     """
-    Envia um alerta com embed rico diretamente para o Discord via Webhook.
+    Envia um alerta com embed rico para o Discord via Webhook.
+    Retorna True se enviado com sucesso, False se falhou.
     """
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     if not webhook_url:
-        print("  [Discord] AVISO: DISCORD_WEBHOOK_URL não configurada.")
-        return
+        print("  [Discord] AVISO: DISCORD_WEBHOOK_URL não encontrada no ambiente!")
+        return False
 
     diff = target_price - current_price
     pct = (diff / target_price) * 100 if target_price > 0 else 0
@@ -73,12 +73,12 @@ def send_discord_alert(product_name: str, current_price: float, target_price: fl
                     },
                     {
                         "name": "🔗 Link Direto",
-                        "value": f"[Abrir Oferta]({url})",
+                        "value": f"[Abrir Oferta na Loja]({url})",
                         "inline": False
                     }
                 ],
                 "footer": {
-                    "text": f"Verificado automaticamente em {timestamp}"
+                    "text": f"Verificado em {timestamp}"
                 }
             }
         ]
@@ -87,6 +87,8 @@ def send_discord_alert(product_name: str, current_price: float, target_price: fl
     try:
         res = requests.post(webhook_url, json=payload, timeout=10)
         res.raise_for_status()
-        print(f"  [Discord] Alerta de '{product_name}' enviado com sucesso!")
+        print(f"  [Discord] ✅ Alerta de '{product_name}' ENTREGUE no seu canal!")
+        return True
     except Exception as e:
-        print(f"  [Discord] Erro ao disparar webhook: {e}")
+        print(f"  [Discord] ❌ Falha ao enviar para o Webhook: {e}")
+        return False

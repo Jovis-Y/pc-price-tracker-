@@ -57,7 +57,7 @@ def extract_kabum(soup: BeautifulSoup, url: str) -> tuple[float | None, str | No
             )
             # 1. Verifica se está disponível / em estoque
             if prod.get("available") is False:
-                return None, "Produto Esgotado / Indisponível"
+                return None, "Produto Esgotado / Indisponível na KaBuM!"
 
             # 2. Pega o preço com desconto (à vista / pix)
             prices = prod.get("prices", {}) or {}
@@ -67,10 +67,9 @@ def extract_kabum(soup: BeautifulSoup, url: str) -> tuple[float | None, str | No
         except Exception:
             pass
 
-    # Fallback via HTML visual
     out_of_stock = soup.find(string=re.compile(r"Produto Indisponível|Avise-me", re.IGNORECASE))
     if out_of_stock:
-        return None, "Produto Esgotado / Indisponível"
+        return None, "Produto Esgotado / Indisponível na KaBuM!"
 
     el = soup.select_one("h4.finalPrice, [class*='finalPrice']")
     if el:
@@ -83,11 +82,11 @@ def extract_kabum(soup: BeautifulSoup, url: str) -> tuple[float | None, str | No
 
 def extract_terabyte(soup: BeautifulSoup, html: str, status_code: int) -> tuple[float | None, str | None]:
     if status_code == 403 or "Just a moment" in html:
-        return None, "Bloqueado pelo Cloudflare da loja (proteção anti-bot)"
+        return None, "Bloqueado pela proteção anti-bot da Terabyte"
 
     out_of_stock = soup.find(string=re.compile(r"Produto Indisponível|Esgotado|Sem estoque", re.IGNORECASE))
     if out_of_stock:
-        return None, "Produto Esgotado"
+        return None, "Produto Esgotado na Terabyte"
 
     el = soup.select_one("#valCarrinho, .val-prod, p.val-prod, [class*='val-prod']")
     if el:
@@ -99,7 +98,6 @@ def extract_terabyte(soup: BeautifulSoup, html: str, status_code: int) -> tuple[
 
 
 def extract_olx(soup: BeautifulSoup) -> tuple[float | None, str | None]:
-    # 1. Busca no __NEXT_DATA__
     next_data = soup.find("script", id="__NEXT_DATA__")
     if next_data and next_data.string:
         try:
@@ -111,7 +109,6 @@ def extract_olx(soup: BeautifulSoup) -> tuple[float | None, str | None]:
         except Exception:
             pass
 
-    # 2. Seletores visuais
     for selector in ['[data-testid="ad-price"]', 'span.olx-text--title-large', 'h2.olx-text']:
         el = soup.select_one(selector)
         if el and "R$" in el.text:
@@ -124,7 +121,7 @@ def extract_olx(soup: BeautifulSoup) -> tuple[float | None, str | None]:
 
 def extract_aliexpress(soup: BeautifulSoup, html: str) -> tuple[float | None, str | None]:
     if "PAGE_NOT_FOUND" in html or "Ops! A página que você procura" in html:
-        return None, "Anúncio expirado ou removido pelo vendedor no AliExpress"
+        return None, "Anúncio expirado / removido pelo vendedor no AliExpress"
 
     match = re.search(r'("formatedActivityPrice"|"actSkuCalPrice"|"minPrice"|"actMinPrice"):\s*"([^"]+)"', html)
     if match:
@@ -139,7 +136,7 @@ def extract_aliexpress(soup: BeautifulSoup, html: str) -> tuple[float | None, st
             if val:
                 return val, None
 
-    return None, "Preço não localizado (possível proteção anti-bot)"
+    return None, "Preço não localizado (proteção anti-bot)"
 
 
 def extract_shopee(url: str, soup: BeautifulSoup) -> tuple[float | None, str | None]:
@@ -158,7 +155,6 @@ def extract_shopee(url: str, soup: BeautifulSoup) -> tuple[float | None, str | N
         except Exception:
             pass
 
-    # Fallback meta tags
     meta = soup.find("meta", property="og:price:amount")
     if meta and meta.get("content"):
         val = clean_price(meta["content"])
@@ -218,7 +214,6 @@ def fetch_product_info(url: str, timeout: int = 15) -> tuple[float | None, str |
         if "amazon.com.br" in url_lower:
             return extract_amazon(soup)
 
-        # Fallback genérico JSON-LD
         for script in soup.find_all("script", type="application/ld+json"):
             if not script.string:
                 continue
@@ -242,7 +237,7 @@ def fetch_product_info(url: str, timeout: int = 15) -> tuple[float | None, str |
 
 
 # ==============================================================================
-# EXECUÇÃO PRINCIPAL
+# CONTROLE DE HISTÓRICO E EXECUÇÃO
 # ==============================================================================
 
 def load_history(filepath: str = "history.json") -> dict:
@@ -300,17 +295,21 @@ def main():
         print(f"   💲 Preço Atual: R$ {current_price:,.2f}")
 
         if current_price <= target_price:
-            print(f"   🎯 META ATINGIDA! Disparando alerta...")
+            print(f"   🎯 META ATINGIDA! Tentando enviar alerta para o Discord...")
             last_notified_price = history.get(url, {}).get("last_notified_price")
             
             if last_notified_price != current_price:
-                send_discord_alert(name, current_price, target_price, url)
-                history[url] = {
-                    "name": name,
-                    "last_notified_price": current_price,
-                    "target_price": target_price,
-                    "timestamp": time.time()
-                }
+                # Dispara o alerta no Discord
+                success = send_discord_alert(name, current_price, target_price, url)
+                if success:
+                    history[url] = {
+                        "name": name,
+                        "last_notified_price": current_price,
+                        "target_price": target_price,
+                        "timestamp": time.time()
+                    }
+                else:
+                    print("   ❌ Alerta não foi salvo no histórico porque o envio falhou.")
             else:
                 print(f"   ℹ️ Alerta já foi enviado antes para este valor (R$ {current_price:,.2f}).")
         else:
