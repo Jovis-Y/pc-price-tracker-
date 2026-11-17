@@ -20,9 +20,6 @@ HEADERS = {
 }
 
 def clean_price(raw_str: str) -> float | None:
-    """
-    Converte strings de preço nos formatos brasileiro ('R$ 1.299,99') ou internacional ('1299.99') para float.
-    """
     if not raw_str:
         return None
     try:
@@ -42,53 +39,66 @@ def clean_price(raw_str: str) -> float | None:
 
 
 # ==============================================================================
-# EXTRATORES GENÉRICOS (SCHEMA.ORG JSON-LD E META TAGS)
+# EXTRATORES POR LOJA (COM VERIFICAÇÃO DE ESTOQUE)
 # ==============================================================================
 
-def extract_price_from_ld_json(soup: BeautifulSoup) -> float | None:
-    """Extrai preço de dados estruturados Schema.org JSON-LD."""
-    for script in soup.find_all("script", type="application/ld+json"):
-        if not script.string:
-            continue
+def extract_kabum(soup: BeautifulSoup, url: str) -> tuple[float | None, str | None]:
+    """
+    Extrai o preço à vista da KaBuM! e verifica se o produto está em estoque.
+    Evita capturar valores de garantia estendida ou produtos esgotados.
+    """
+    script = soup.find("script", id="__NEXT_DATA__")
+    if script and script.string:
         try:
             data = json.loads(script.string)
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                if item.get("@type") in ["Product", "IndividualProduct"] and "offers" in item:
-                    offers = item["offers"]
-                    if isinstance(offers, list) and len(offers) > 0:
-                        offers = offers[0]
-                    price = offers.get("price") or offers.get("lowPrice")
-                    if price:
-                        return clean_price(str(price))
+            prod = (
+                data.get("props", {}).get("pageProps", {}).get("product", {}) or
+                data.get("props", {}).get("pageProps", {}).get("initialData", {}).get("data", {})
+            )
+            # 1. Verifica se está disponível / em estoque
+            if prod.get("available") is False:
+                return None, "Produto Esgotado / Indisponível"
+
+            # 2. Pega o preço com desconto (à vista / pix)
+            prices = prod.get("prices", {}) or {}
+            price = prices.get("priceWithDiscount") or prices.get("price") or prod.get("price")
+            if price and float(price) > 0:
+                return float(price), None
         except Exception:
-            continue
-    return None
+            pass
+
+    # Fallback via HTML visual
+    out_of_stock = soup.find(string=re.compile(r"Produto Indisponível|Avise-me", re.IGNORECASE))
+    if out_of_stock:
+        return None, "Produto Esgotado / Indisponível"
+
+    el = soup.select_one("h4.finalPrice, [class*='finalPrice']")
+    if el:
+        val = clean_price(el.text)
+        if val:
+            return val, None
+
+    return None, "Preço não localizado na página"
 
 
-def extract_price_from_meta_tags(soup: BeautifulSoup) -> float | None:
-    """Busca preço em meta tags OpenGraph / Twitter / Product."""
-    meta_props = [
-        {"property": "product:price:amount"},
-        {"property": "og:price:amount"},
-        {"name": "twitter:data1"},
-        {"itemprop": "price"}
-    ]
-    for prop in meta_props:
-        tag = soup.find("meta", prop)
-        if tag and tag.get("content"):
-            val = clean_price(tag["content"])
-            if val:
-                return val
-    return None
+def extract_terabyte(soup: BeautifulSoup, html: str, status_code: int) -> tuple[float | None, str | None]:
+    if status_code == 403 or "Just a moment" in html:
+        return None, "Bloqueado pelo Cloudflare da loja (proteção anti-bot)"
+
+    out_of_stock = soup.find(string=re.compile(r"Produto Indisponível|Esgotado|Sem estoque", re.IGNORECASE))
+    if out_of_stock:
+        return None, "Produto Esgotado"
+
+    el = soup.select_one("#valCarrinho, .val-prod, p.val-prod, [class*='val-prod']")
+    if el:
+        val = clean_price(el.text)
+        if val:
+            return val, None
+
+    return None, "Preço não localizado"
 
 
-# ==============================================================================
-# EXTRATORES ESPECÍFICOS POR LOJA
-# ==============================================================================
-
-def extract_olx(soup: BeautifulSoup, html: str) -> float | None:
-    """Extrai preço de anúncios da OLX Brasil."""
+def extract_olx(soup: BeautifulSoup) -> tuple[float | None, str | None]:
     # 1. Busca no __NEXT_DATA__
     next_data = soup.find("script", id="__NEXT_DATA__")
     if next_data and next_data.string:
@@ -97,162 +107,142 @@ def extract_olx(soup: BeautifulSoup, html: str) -> float | None:
             ad = data.get("props", {}).get("pageProps", {}).get("ad", {})
             price_val = ad.get("priceValue") or ad.get("price")
             if price_val:
-                return clean_price(str(price_val))
+                return clean_price(str(price_val)), None
         except Exception:
             pass
 
-    # 2. Seletores visuais da OLX
+    # 2. Seletores visuais
     for selector in ['[data-testid="ad-price"]', 'span.olx-text--title-large', 'h2.olx-text']:
         el = soup.select_one(selector)
         if el and "R$" in el.text:
             val = clean_price(el.text)
             if val:
-                return val
-    return None
+                return val, None
+
+    return None, "Anúncio expirado ou preço não encontrado"
 
 
-def extract_aliexpress(soup: BeautifulSoup, html: str) -> float | None:
-    """Extrai preço de produtos do AliExpress."""
-    # 1. Regex de runParams
+def extract_aliexpress(soup: BeautifulSoup, html: str) -> tuple[float | None, str | None]:
+    if "PAGE_NOT_FOUND" in html or "Ops! A página que você procura" in html:
+        return None, "Anúncio expirado ou removido pelo vendedor no AliExpress"
+
     match = re.search(r'("formatedActivityPrice"|"actSkuCalPrice"|"minPrice"|"actMinPrice"):\s*"([^"]+)"', html)
     if match:
         val = clean_price(match.group(2))
         if val:
-            return val
+            return val, None
 
-    # 2. Regex de valor numérico direto
-    match_num = re.search(r'"minPrice":\s*([0-9\.]+)', html)
-    if match_num:
-        val = clean_price(match_num.group(1))
-        if val:
-            return val
-
-    # 3. Seletores HTML do AliExpress
-    for sel in [".product-price-value", ".es--wrap--16EaW-Z", "[class*='Price--currentPrice']"]:
+    for sel in [".product-price-value", "[class*='Price--currentPrice']"]:
         el = soup.select_one(sel)
         if el:
             val = clean_price(el.text)
             if val:
-                return val
-    return None
+                return val, None
+
+    return None, "Preço não localizado (possível proteção anti-bot)"
 
 
-def extract_shopee(url: str, soup: BeautifulSoup) -> float | None:
-    """Extrai preço da Shopee via API interna do item ou meta tags."""
-    # Tenta extrair shopid e itemid da URL
-    # Formatos: /product/12345/67890 ou -i.12345.67890
+def extract_shopee(url: str, soup: BeautifulSoup) -> tuple[float | None, str | None]:
     match = re.search(r'i\.(\d+)\.(\d+)', url) or re.search(r'product/(\d+)/(\d+)', url)
     if match:
-        shop_id = match.group(1)
-        item_id = match.group(2)
+        shop_id, item_id = match.group(1), match.group(2)
         api_url = f"https://shopee.com.br/api/v4/item/get?itemid={item_id}&shopid={shop_id}"
-        api_headers = {
-            **HEADERS,
-            "X-API-SOURCE": "rpc",
-            "Referer": url
-        }
+        api_headers = {**HEADERS, "X-API-SOURCE": "rpc", "Referer": url}
         try:
             res = requests.get(api_url, headers=api_headers, timeout=10)
             if res.status_code == 200:
                 data = res.json().get("data", {})
-                raw_price = data.get("price") or data.get("price_min") or data.get("price_before_discount")
+                raw_price = data.get("price") or data.get("price_min")
                 if raw_price:
-                    # Shopee armazena preços multiplicados por 100.000
-                    return float(raw_price) / 100000.0
+                    return float(raw_price) / 100000.0, None
         except Exception:
             pass
 
-    # Fallback: Meta tags da página HTML da Shopee
-    return extract_price_from_meta_tags(soup)
+    # Fallback meta tags
+    meta = soup.find("meta", property="og:price:amount")
+    if meta and meta.get("content"):
+        val = clean_price(meta["content"])
+        if val:
+            return val, None
+
+    return None, "Preço não localizado na Shopee"
 
 
-def extract_store_specific(soup: BeautifulSoup, html: str, url: str) -> float | None:
-    """Direciona para o extrator específico conforme o domínio."""
-    url_lower = url.lower()
-
-    # Shopee
-    if "shopee.com.br" in url_lower:
-        return extract_shopee(url, soup)
-
-    # OLX
-    if "olx.com.br" in url_lower:
-        return extract_olx(soup, html)
-
-    # AliExpress
-    if "aliexpress.com" in url_lower:
-        return extract_aliexpress(soup, html)
-
-    # Kabum
-    if "kabum.com.br" in url_lower:
-        el = soup.select_one("h4.finalPrice, .regularPrice, [class*='finalPrice']")
-        if el:
-            return clean_price(el.text)
-
-    # Terabyte
-    if "terabyteshop.com.br" in url_lower:
-        el = soup.select_one("#valCarrinho, .val-prod, p.val-prod, [class*='val-prod']")
-        if el:
-            return clean_price(el.text)
-
-    # Pichau
-    if "pichau.com.br" in url_lower:
-        el = soup.select_one("[class*='price'], [class*='preco']")
-        if el:
-            return clean_price(el.text)
-
-    # Mercado Livre
-    if "mercadolivre.com.br" in url_lower:
-        el = soup.select_one(".ui-pdp-price__second-line .andes-money-amount__fraction, .price-tag-fraction")
-        if el:
-            cents_el = soup.select_one(".ui-pdp-price__second-line .andes-money-amount__cents")
-            cents = cents_el.text if cents_el else "00"
-            return clean_price(f"{el.text},{cents}")
-
-    # Amazon Brasil
-    if "amazon.com.br" in url_lower:
-        whole = soup.select_one(".a-price-whole")
-        fraction = soup.select_one(".a-price-fraction")
-        if whole:
-            val_str = whole.text.replace(".", "").replace(",", "")
-            dec = fraction.text if fraction else "00"
-            return clean_price(f"{val_str}.{dec}")
-
-    return None
+def extract_mercadolivre(soup: BeautifulSoup) -> tuple[float | None, str | None]:
+    el = soup.select_one(".ui-pdp-price__second-line .andes-money-amount__fraction, .price-tag-fraction")
+    if el:
+        cents_el = soup.select_one(".ui-pdp-price__second-line .andes-money-amount__cents")
+        cents = cents_el.text if cents_el else "00"
+        return clean_price(f"{el.text},{cents}"), None
+    return None, "Preço não localizado no Mercado Livre"
 
 
-def fetch_price(url: str, timeout: int = 15) -> float | None:
-    """Faz a requisição e tenta as múltiplas estratégias de extração."""
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=timeout)
-        if res.status_code != 200:
-            print(f"  [Aviso] Falha HTTP {res.status_code} para {url}")
-            return None
-
-        soup = BeautifulSoup(res.text, "lxml")
-
-        # 1. Extrator específico por loja
-        price = extract_store_specific(soup, res.text, url)
-        if price:
-            return price
-
-        # 2. Schema.org JSON-LD
-        price = extract_price_from_ld_json(soup)
-        if price:
-            return price
-
-        # 3. Meta Tags (OpenGraph / Twitter)
-        price = extract_price_from_meta_tags(soup)
-        if price:
-            return price
-
-        return None
-    except Exception as e:
-        print(f"  [Erro] Falha ao consultar {url}: {e}")
-        return None
+def extract_amazon(soup: BeautifulSoup) -> tuple[float | None, str | None]:
+    whole = soup.select_one(".a-price-whole")
+    fraction = soup.select_one(".a-price-fraction")
+    if whole:
+        val_str = whole.text.replace(".", "").replace(",", "")
+        dec = fraction.text if fraction else "00"
+        return clean_price(f"{val_str}.{dec}"), None
+    return None, "Preço não localizado na Amazon"
 
 
 # ==============================================================================
-# CONTROLE DE HISTÓRICO E EXECUÇÃO
+# ROTEADOR DE EXTRAÇÃO
+# ==============================================================================
+
+def fetch_product_info(url: str, timeout: int = 15) -> tuple[float | None, str | None]:
+    url_lower = url.lower()
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=timeout)
+        soup = BeautifulSoup(res.text, "lxml")
+
+        if "kabum.com.br" in url_lower:
+            return extract_kabum(soup, url)
+
+        if "terabyteshop.com.br" in url_lower:
+            return extract_terabyte(soup, res.text, res.status_code)
+
+        if "shopee.com.br" in url_lower:
+            return extract_shopee(url, soup)
+
+        if "olx.com.br" in url_lower:
+            return extract_olx(soup)
+
+        if "aliexpress.com" in url_lower:
+            return extract_aliexpress(soup, res.text)
+
+        if "mercadolivre.com.br" in url_lower:
+            return extract_mercadolivre(soup)
+
+        if "amazon.com.br" in url_lower:
+            return extract_amazon(soup)
+
+        # Fallback genérico JSON-LD
+        for script in soup.find_all("script", type="application/ld+json"):
+            if not script.string:
+                continue
+            try:
+                data = json.loads(script.string)
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if item.get("@type") in ["Product", "IndividualProduct"] and "offers" in item:
+                        offers = item["offers"]
+                        if isinstance(offers, list) and len(offers) > 0:
+                            offers = offers[0]
+                        price = offers.get("price") or offers.get("lowPrice")
+                        if price:
+                            return clean_price(str(price)), None
+            except Exception:
+                continue
+
+        return None, "Preço não encontrado na estrutura da página"
+    except Exception as e:
+        return None, f"Erro de conexão: {e}"
+
+
+# ==============================================================================
+# EXECUÇÃO PRINCIPAL
 # ==============================================================================
 
 def load_history(filepath: str = "history.json") -> dict:
@@ -301,10 +291,10 @@ def main():
         print(f"\n🔍 Verificando: {name}")
         print(f"   Alvo: R$ {target_price:,.2f} | Link: {url}")
 
-        current_price = fetch_price(url, timeout=timeout)
+        current_price, status_msg = fetch_product_info(url, timeout=timeout)
 
         if current_price is None:
-            print(f"   ⚠️ Preço não identificado no momento.")
+            print(f"   ⚠️ {status_msg or 'Preço não identificado no momento.'}")
             continue
 
         print(f"   💲 Preço Atual: R$ {current_price:,.2f}")
@@ -313,7 +303,6 @@ def main():
             print(f"   🎯 META ATINGIDA! Disparando alerta...")
             last_notified_price = history.get(url, {}).get("last_notified_price")
             
-            # Só reenvia se o preço mudou para evitar alertas duplicados a cada 4 horas
             if last_notified_price != current_price:
                 send_discord_alert(name, current_price, target_price, url)
                 history[url] = {
@@ -328,7 +317,6 @@ def main():
             diff = current_price - target_price
             print(f"   ⏳ Acima da meta por R$ {diff:,.2f}.")
 
-        # Delay cortês entre requisições
         time.sleep(2)
 
     save_history(history)
