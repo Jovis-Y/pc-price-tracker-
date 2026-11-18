@@ -39,14 +39,40 @@ def clean_price(raw_str: str) -> float | None:
 
 
 # ==============================================================================
-# EXTRATORES POR LOJA (COM VERIFICAÇÃO DE ESTOQUE)
+# EXTRATORES POR LOJA / COMPARADOR
 # ==============================================================================
 
+def extract_hardwarebarato(soup: BeautifulSoup) -> tuple[float | None, str | None]:
+    """
+    Extrai o menor preço agregado entre todas as lojas cadastradas no Hardware Barato.
+    """
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string:
+            continue
+        try:
+            data = json.loads(script.string)
+            if data.get("@type") == "Product" and "offers" in data:
+                offers = data["offers"]
+                if offers.get("offerCount") == 0:
+                    return None, "Produto sem lojas com estoque no momento"
+                low_price = offers.get("lowPrice")
+                if low_price and float(low_price) > 0:
+                    return float(low_price), None
+        except Exception:
+            continue
+
+    # Fallback seletores visuais do Hardware Barato
+    for sel in ["p.text-green-400", "p.text-accent-primary", "span.tabular-nums"]:
+        el = soup.select_one(sel)
+        if el and "R$" in el.text and "Carregando" not in el.text:
+            val = clean_price(el.text)
+            if val:
+                return val, None
+
+    return None, "Preço agregado não localizado no Hardware Barato"
+
+
 def extract_kabum(soup: BeautifulSoup, url: str) -> tuple[float | None, str | None]:
-    """
-    Extrai o preço à vista da KaBuM! e verifica se o produto está em estoque.
-    Evita capturar valores de garantia estendida ou produtos esgotados.
-    """
     script = soup.find("script", id="__NEXT_DATA__")
     if script and script.string:
         try:
@@ -55,11 +81,9 @@ def extract_kabum(soup: BeautifulSoup, url: str) -> tuple[float | None, str | No
                 data.get("props", {}).get("pageProps", {}).get("product", {}) or
                 data.get("props", {}).get("pageProps", {}).get("initialData", {}).get("data", {})
             )
-            # 1. Verifica se está disponível / em estoque
             if prod.get("available") is False:
                 return None, "Produto Esgotado / Indisponível na KaBuM!"
 
-            # 2. Pega o preço com desconto (à vista / pix)
             prices = prod.get("prices", {}) or {}
             price = prices.get("priceWithDiscount") or prices.get("price") or prod.get("price")
             if price and float(price) > 0:
@@ -193,6 +217,10 @@ def fetch_product_info(url: str, timeout: int = 15) -> tuple[float | None, str |
         res = requests.get(url, headers=HEADERS, timeout=timeout)
         soup = BeautifulSoup(res.text, "lxml")
 
+        # Hardware Barato (Comparador Agregador)
+        if "hardwarebarato.com" in url_lower:
+            return extract_hardwarebarato(soup)
+
         if "kabum.com.br" in url_lower:
             return extract_kabum(soup, url)
 
@@ -260,7 +288,7 @@ def save_history(history: dict, filepath: str = "history.json"):
 
 def main():
     print("=" * 65)
-    print("🚀 Radar de Preços PC (Kabum, Terabyte, Pichau, ML, Amazon, OLX, Ali, Shopee)")
+    print("🚀 Radar de Preços PC (Lojas e Comparadores Brasileiros)")
     print("=" * 65)
 
     config_path = "config.json"
@@ -299,7 +327,6 @@ def main():
             last_notified_price = history.get(url, {}).get("last_notified_price")
             
             if last_notified_price != current_price:
-                # Dispara o alerta no Discord
                 success = send_discord_alert(name, current_price, target_price, url)
                 if success:
                     history[url] = {
@@ -309,7 +336,7 @@ def main():
                         "timestamp": time.time()
                     }
                 else:
-                    print("   ❌ Alerta não foi salvo no histórico porque o envio falhou.")
+                    print("   ❌ Alerta não salvo no histórico pois o envio falhou.")
             else:
                 print(f"   ℹ️ Alerta já foi enviado antes para este valor (R$ {current_price:,.2f}).")
         else:

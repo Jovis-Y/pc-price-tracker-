@@ -4,69 +4,37 @@ Monitor automatizado de preços de peças de PC rodando gratuitamente via **GitH
 
 ---
 
-### 🏪 Lojas Suportadas
+### 🏪 Lojas e Comparadores Suportados
 
-1. **KaBuM!**
-2. **TerabyteShop**
-3. **Pichau**
-4. **Mercado Livre**
-5. **Amazon Brasil**
-6. **OLX Brasil** *(Ótimo para oportunidades em monitores e usados)*
-7. **AliExpress** *(Excelente para processadores Ryzen 5700X3D e memórias RAM)*
-8. **Shopee Brasil**
-
----
-
-### 🔔 Como Funciona o Alerta no Discord
-
-Quando o robô encontra um preço **menor ou igual ao seu preço-alvo**, ele envia uma mensagem personalizada no seu canal do Discord com:
-* Nome do produto e Loja de origem
-* Preço Atual vs Preço-Alvo
-* Economia (R$ e %)
-* Link direto para a loja
-* Cor temática no Embed de acordo com a loja (ex: Laranja KaBuM, Roxo OLX, Vermelho AliExpress, etc.)
+1. **Hardware Barato** *(⭐ Comparador que reúne KaBuM, Terabyte, Pichau, Amazon e ML no mesmo link!)*
+2. **KaBuM!**
+3. **TerabyteShop**
+4. **Pichau**
+5. **Mercado Livre**
+6. **Amazon Brasil**
+7. **OLX Brasil** *(Ótimo para oportunidades em monitores e usados)*
+8. **AliExpress** *(Excelente para processadores e memórias RAM)*
+9. **Shopee Brasil**
 
 ---
 
-### ⚙️ Como Configurar no seu GitHub
+### 💡 Dica de Ouro: Usar o Hardware Barato
+Ao invés de colocar o link de uma loja específica, você pode colocar o link do produto no **Hardware Barato**. Ele monitora **todas as lojas do Brasil ao mesmo tempo** e o robô vai sempre capturar o **menor valor de todas elas** sem risco de bloqueio de Cloudflare!
 
-#### 1. Criar o Repositório no GitHub
-1. Acesse [github.com/new](https://github.com/) e crie um repositório (pode ser **Privado** ou **Público**).
-2. Na pasta do projeto, envie os arquivos:
-   ```bash
-   git branch -M main
-   git remote add origin https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
-   git push -u origin main
-   ```
+Exemplo de link no `config.json`:
+* `https://www.hardwarebarato.com/produtos/processadores/ryzen-7-5700x3d`
+* `https://www.hardwarebarato.com/produtos/fontes/xpg-core-reactor-ii-ve-850w`
 
-#### 2. Configurar o Webhook do Discord (GitHub Secret)
-1. No seu servidor do Discord, vá nas configurações do canal que receberá os alertas:
+---
+
+### ⚙️ Como Configurar o Webhook no GitHub
+
+1. No seu servidor do Discord:
    * **Editar Canal** > **Integrações** > **Webhooks** > **Novo Webhook** > **Copiar URL do Webhook**.
 2. No seu repositório no GitHub:
-   * Vá em **Settings** > **Secrets and variables** > **Actions**.
-   * Clique em **New repository secret**.
+   * Acesse: **Settings** > **Secrets and variables** > **Actions**.
+   * Em **Repository secrets**, clique em **New repository secret**.
    * **Name:** `DISCORD_WEBHOOK_URL`
-   * **Secret:** Cole a URL do Webhook do Discord.
-
-#### 3. Dar Permissão para Salvar o Histórico
-1. No repositório, vá em **Settings** > **Actions** > **General**.
-2. Em **Workflow permissions**, selecione **Read and write permissions**.
-3. Clique em **Save**.
-
----
-
-### 📝 Como Adicionar ou Alterar Produtos
-
-Abra o arquivo `config.json` e edite ou insira novos itens:
-
-```json
-{
-  "name": "AMD Ryzen 7 5700X3D",
-  "category": "CPU",
-  "target_price": 1250.00,
-  "url": "https://pt.aliexpress.com/item/1005006504285741.html",
-  "active": true
-}
-```
-
-* Defina `"active": false` para pausar o monitoramento de um produto sem precisar apagá-lo.
+   * **Secret:** Cole a URL do Webhook.
+3. Permissão para salvar histórico:
+   * Em **Settings** > **Actions** > **General** > **Workflow permissions**, marque **Read and write permissions** e salve.

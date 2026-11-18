@@ -9,7 +9,14 @@
       "name": "⚡ TESTE DE ALERTA NO DISCORD (Desative após receber)",
       "category": "Teste",
       "target_price": 9999.00,
-      "url": "https://www.kabum.com.br/produto/172365/memoria-kingston-fury-beast-8gb-3200mhz-ddr4-cl16-preto-kf432c16bb-8",
+      "url": "https://www.hardwarebarato.com/produtos/fontes/xpg-core-reactor-ii-ve-850w",
+      "active": true
+    },
+    {
+      "name": "AMD Ryzen 7 5700X3D (Menor Preço Brasil via Hardware Barato)",
+      "category": "CPU",
+      "target_price": 1300.00,
+      "url": "https://www.hardwarebarato.com/produtos/processadores/ryzen-7-5700x3d",
       "active": true
     },
     {
@@ -20,13 +27,6 @@
       "active": true
     },
     {
-      "name": "RX 7900 XT 20GB Phantom Gaming (Terabyte)",
-      "category": "GPU",
-      "target_price": 4600.00,
-      "url": "https://www.terabyteshop.com.br/produto/23472/placa-de-video-asrock-amd-radeon-rx-7900-xt-phantom-gaming-oc-20gb-gddr6-fsr-ray-tracing-90-ga3zpp-00uanf",
-      "active": true
-    },
-    {
       "name": "Monitor Gamer Gigabyte 28 4K 144Hz M28U (KaBuM!)",
       "category": "Monitor",
       "target_price": 2800.00,
@@ -34,10 +34,10 @@
       "active": true
     },
     {
-      "name": "Cooler Thermalright Peerless Assassin 120 SE (Terabyte)",
-      "category": "Cooler",
-      "target_price": 250.00,
-      "url": "https://www.terabyteshop.com.br/produto/27649/cooler-para-processador-thermalright-peerless-assassin-120-se-argb-120mm-intel-amd-black-tl-c12c-s",
+      "name": "RX 7900 XT 20GB Phantom Gaming (Terabyte)",
+      "category": "GPU",
+      "target_price": 4600.00,
+      "url": "https://www.terabyteshop.com.br/produto/23472/placa-de-video-asrock-amd-radeon-rx-7900-xt-phantom-gaming-oc-20gb-gddr6-fsr-ray-tracing-90-ga3zpp-00uanf",
       "active": true
     }
   ]

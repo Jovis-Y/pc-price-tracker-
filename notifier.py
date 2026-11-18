@@ -3,6 +3,7 @@ import requests
 from datetime import datetime
 
 STORE_METADATA = {
+    "hardwarebarato": {"name": "Hardware Barato", "color": 41727}, # Ciano/Azul (#00A3FF)
     "kabum": {"name": "KaBuM!", "color": 16744192},
     "terabyte": {"name": "TerabyteShop", "color": 16753920},
     "pichau": {"name": "Pichau", "color": 14423100},
@@ -41,18 +42,22 @@ def send_discord_alert(product_name: str, current_price: float, target_price: fl
     targ_fmt = f"R$ {target_price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     diff_fmt = f"R$ {diff:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+    description = f"Preço abaixo da meta no **{store['name']}**!"
+    if "hardwarebarato" in url.lower():
+        description = f"🔥 **Menor preço do Brasil encontrado no comparador {store['name']}!**"
+
     payload = {
         "username": "Radar de Preços PC",
         "avatar_url": "https://cdn-icons-png.flaticon.com/512/891/891462.png",
         "embeds": [
             {
                 "title": f"🚨 ALERTA: {product_name}",
-                "description": f"Preço abaixo da meta na loja **{store['name']}**!",
+                "description": description,
                 "url": url,
                 "color": store["color"],
                 "fields": [
                     {
-                        "name": "💰 Preço Atual",
+                        "name": "💰 Menor Preço Atual",
                         "value": f"**{curr_fmt}**",
                         "inline": True
                     },
@@ -67,18 +72,18 @@ def send_discord_alert(product_name: str, current_price: float, target_price: fl
                         "inline": True
                     },
                     {
-                        "name": "🏪 Loja",
+                        "name": "🏪 Origem",
                         "value": store["name"],
                         "inline": True
                     },
                     {
-                        "name": "🔗 Link Direto",
-                        "value": f"[Abrir Oferta na Loja]({url})",
+                        "name": "🔗 Link da Oferta",
+                        "value": f"[Clique para Acessar]({url})",
                         "inline": False
                     }
                 ],
                 "footer": {
-                    "text": f"Verificado em {timestamp}"
+                    "text": f"Verificado automaticamente em {timestamp}"
                 }
             }
         ]
